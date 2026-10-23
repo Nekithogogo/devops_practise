@@ -164,3 +164,82 @@ sudo ufw logging medium
 | `01-clean-install` | 23.10.2026 06:38 | ОС установлена и обновлена, пользователь `student`, SSH на порту 22 |
 | `02-keys-configured` | 23.10.2026 06:39 | пользователь `devops`, вход по ключу, `~/.ssh/config` на хосте |
 | `03-ssh-hardened` | 23.10.2026 06:41 | `99-hardening.conf`, порт 2222, проброс 2222→2222 |
+| `04-nginx-https` | 23.10.2026 07:02 | Nginx, ресурс `devops.local`, самоподписанный сертификат, HTTP→HTTPS |
+
+## 8. Веб-сервер
+
+**Пакет:** `nginx` (1.24.0, репозиторий Ubuntu): `sudo apt install -y nginx`. Профили UFW `Nginx *` не используются —
+порты 80/443 уже открыты правилами из раздела 6.
+
+**Конфигурация ресурса:** `/etc/nginx/sites-available/devops-site` (владелец root, 644), включена символической ссылкой
+`/etc/nginx/sites-enabled/devops-site`; стандартный ресурс отключён удалением ссылки `/etc/nginx/sites-enabled/default`
+(файл в `sites-available` сохранён).
+
+```nginx
+# Блок 1: перенаправление HTTP -> HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name devops.local;
+
+    return 301 https://$host$request_uri;
+}
+
+# Блок 2: ресурс по HTTPS
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+
+    server_name devops.local;
+
+    ssl_certificate     /etc/ssl/certs/devops.crt;
+    ssl_certificate_key /etc/ssl/private/devops.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    root /var/www/devops-site;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    error_page 404 /404.html;
+
+    access_log /var/log/nginx/devops-site.access.log;
+    error_log  /var/log/nginx/devops-site.error.log;
+}
+```
+
+Применение только так: `sudo nginx -t && sudo systemctl reload nginx` (не `restart`). HSTS не включать.
+
+**Каталог ресурса:** `/var/www/devops-site`, владелец `devops:devops`, каталог `755` (`drwxr-xr-x`), файлы `644`.
+`www-data` только читает. Создание:
+
+```bash
+sudo mkdir -p /var/www/devops-site
+sudo chown -R devops:devops /var/www/devops-site
+```
+
+Содержимое доставляется из каталога `site/` репозитория сценарием `scripts/deploy.sh`
+(`rsync -avz --delete --chmod=D755,F644`, одно SSH-соединение, проверка `curl --cacert`).
+
+**Сертификат и ключ:**
+
+| Файл | Владелец | Права |
+|---|---|---|
+| `/etc/ssl/certs/devops.crt` | root:root | 644 |
+| `/etc/ssl/private/devops.key` | root:root | 600 (читает только главный процесс nginx) |
+
+```bash
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/devops.key \
+  -out /etc/ssl/certs/devops.crt \
+  -subj "/CN=devops.local" \
+  -addext "subjectAltName=DNS:devops.local"
+```
+
+Срок действия: 365 дней (с 23.10.2026 по 23.10.2027). На хосте копия сертификата — `~/devops.crt`
+(`scp devops:/etc/ssl/certs/devops.crt ~/devops.crt`), используется как доверенный CA: `curl --cacert ~/devops.crt`.
+
+**Хост (Windows):** rsync отсутствует в Git Bash — установлен из MSYS2 (`pacman -S rsync openssh`), вызывается обёрткой
+`~/bin/rsync`; в `C:\msys64\etc\nsswitch.conf` задано `db_home: windows`, чтобы ssh из MSYS2 читал тот же `~/.ssh/config`.
