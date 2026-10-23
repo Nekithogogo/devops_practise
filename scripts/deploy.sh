@@ -9,7 +9,8 @@ SITE_URL="https://devops.local"
 CA_CERT="${HOME}/devops.crt"
 # Если имя devops.local не прописано в hosts, адрес можно передать явно: DEVOPS_IP=192.168.56.101
 RESOLVE=(${DEVOPS_IP:+--resolve "devops.local:443:${DEVOPS_IP}"})
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+# pwd вместо прямого вывода rev-parse: в Git for Windows он имеет вид C:/..., и rsync принимает "C:" за удалённый узел
+REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd)"
 LOCAL_DIR="${REPO_ROOT}/site/"
 
 die() { echo "deploy: $*" >&2; exit 1; }
