@@ -165,6 +165,7 @@ sudo ufw logging medium
 | `02-keys-configured` | 23.10.2026 06:39 | пользователь `devops`, вход по ключу, `~/.ssh/config` на хосте |
 | `03-ssh-hardened` | 23.10.2026 06:41 | `99-hardening.conf`, порт 2222, проброс 2222→2222 |
 | `04-nginx-https` | 23.10.2026 07:02 | Nginx, ресурс `devops.local`, самоподписанный сертификат, HTTP→HTTPS |
+| `05-docker-compose` | 23.10.2026 07:10 | Docker Engine, проект `~/app` (приложение + PostgreSQL) запущен |
 
 ## 8. Веб-сервер
 
@@ -243,3 +244,69 @@ sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
 
 **Хост (Windows):** rsync отсутствует в Git Bash — установлен из MSYS2 (`pacman -S rsync openssh`), вызывается обёрткой
 `~/bin/rsync`; в `C:\msys64\etc\nsswitch.conf` задано `db_home: windows`, чтобы ssh из MSYS2 читал тот же `~/.ssh/config`.
+
+## 9. Контейнеризация
+
+**Docker Engine:** установлен из официального репозитория Docker (не пакет `docker.io` из Ubuntu), версия 29.9.2,
+Compose-плагин v5.6.1.
+
+```bash
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+**Группа docker:** только `devops` (у него есть sudo; участник группы docker фактически равен root):
+`sudo usermod -aG docker devops`, затем новая SSH-сессия.
+
+**Проект:** `/home/devops/app` (`~/app`) — копия каталога `app/` репозитория. Доставка с хоста:
+
+```bash
+rsync -avz --delete --exclude=.env app/ devops:app/
+```
+
+Состав: `Dockerfile` (python:3.12-slim, пользователь `app`, gunicorn на 5000), `requirements.txt`, `app.py`,
+`.dockerignore` (`.env`, `__pycache__/`, `*.pyc`), `.env.example`, `docker-compose.yml`.
+
+**Файл .env:** `/home/devops/app/.env`, владелец devops, права **600**, в репозиторий не попадает (`.gitignore`).
+Создание на сервере:
+
+```bash
+cd ~/app && cp .env.example .env && chmod 600 .env
+sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
+```
+
+Переменные: `POSTGRES_DB=app`, `POSTGRES_USER=app`, `POSTGRES_PASSWORD=<случайный>`, `DB_HOST=db`.
+
+**Запуск:** `cd ~/app && docker compose up -d --build`. Контейнеры `app-app-1` (образ `devops-app:1.0`) и
+`app-db-1` (`postgres:16-alpine`, healthcheck `pg_isready`), политика `restart: unless-stopped`.
+
+**Публикуемые порты и адреса:**
+
+| Сервис | Порт в контейнере | Публикация | Доступ |
+|---|---|---|---|
+| app | 5000 | `127.0.0.1:5000:5000` | только с самого сервера (Nginx) |
+| db | 5432 | не публикуется | только из сети `app_backend` по имени `db` |
+
+Публиковать порт на `0.0.0.0` нельзя: правила Docker в iptables обходят UFW.
+
+**Сеть и тома:** сеть `app_backend` (bridge), именованный том `app_db_data` → `/var/lib/postgresql/data`.
+`docker compose down` том сохраняет, `docker compose down -v` — удаляет (данные БД теряются).
+
+**Обратный прокси:** в HTTPS-блок `/etc/nginx/sites-available/devops-site` добавлено:
+
+```nginx
+    location /app/ {
+        proxy_pass http://127.0.0.1:5000/;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+```
+
+`sudo nginx -t && sudo systemctl reload nginx`. Статический ресурс `/` сохранён, приложение — `https://devops.local/app/`.

@@ -45,5 +45,13 @@ check "Сертификат действителен ещё не менее ${CE
 check "Нет файлов ресурса, доступных для записи всем" "" "$(find "$SITE_DIR" -perm -o+w 2>/dev/null)"
 check "Права закрытого ключа TLS равны 600" "600" "$(sudo stat -c '%a' "$KEY")"
 
+echo "[5] Контейнеризация"
+check "Служба docker активна" "active" "$(systemctl is-active docker)"
+check "Контейнер СУБД в состоянии healthy" "healthy" \
+    "$(docker inspect -f '{{.State.Health.Status}}' app-db-1 2>/dev/null || echo 'нет контейнера')"
+check "Порты 5000/5432 слушаются только на 127.0.0.1" "" \
+    "$(ss -tln | awk '$4 ~ /:(5000|5432)$/ && $4 !~ /^127\.0\.0\.1:/ {printf "%s ", $4}')"
+check "Права ~/app/.env равны 600" "600" "$(stat -c '%a' "$HOME/app/.env" 2>/dev/null)"
+
 echo "Пройдено: $PASS, не пройдено: $FAIL"
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
