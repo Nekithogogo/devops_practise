@@ -2,11 +2,12 @@ import os
 
 import psycopg2
 from flask import Flask
+from psycopg2.extensions import connection
 
-app = Flask(__name__)
+app: Flask = Flask(__name__)
 
 
-def get_connection():
+def get_connection() -> connection:
     return psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),
         dbname=os.getenv("POSTGRES_DB", "app"),
@@ -16,13 +17,13 @@ def get_connection():
 
 
 @app.route("/health")
-def health():
+def health() -> str:
     return "ok\n"
 
 
 @app.route("/")
-def index():
-    conn = get_connection()
+def index() -> str:
+    conn: connection = get_connection()
     try:
         with conn, conn.cursor() as cur:
             cur.execute(
@@ -31,7 +32,8 @@ def index():
             )
             cur.execute("INSERT INTO visits DEFAULT VALUES")
             cur.execute("SELECT count(*) FROM visits")
-            count = cur.fetchone()[0]
+            row: tuple[int] | None = cur.fetchone()
+            count: int = row[0] if row is not None else 0
     finally:
         conn.close()
     return f"Hello from Docker, Изюменко! Visits: {count}\n"
