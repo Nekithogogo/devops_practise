@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-PASS=0; FAIL=0
+# Типы переменных задаются через declare: -i — целое, -r — только чтение (константа)
+declare -i PASS=0 FAIL=0
 
 check() {
-    local desc="$1" expected="$2" actual="$3"
+    local -r desc="$1" expected="$2" actual="$3"
     if [[ "$actual" == "$expected" ]]; then
         echo "  [OK]   $desc"; ((PASS++))
     else
@@ -15,11 +16,11 @@ check() {
 echo "Аудит конфигурации: $(hostname -f), $(date '+%Y-%m-%d %H:%M')"
 
 echo "[1] Служба SSH"
-SSHD_T="$(sudo sshd -T)"
+declare -r SSHD_T="$(sudo sshd -T)"
 check "Вход от имени root запрещён"        "no" "$(awk '/^permitrootlogin/{print $2}' <<<"$SSHD_T")"
 check "Парольная аутентификация отключена" "no" "$(awk '/^passwordauthentication/{print $2}' <<<"$SSHD_T")"
 # TODO 1: значение параметра port отлично от 22
-SSH_PORT="$(awk '/^port /{print $2}' <<<"$SSHD_T")"
+declare -r SSH_PORT="$(awk '/^port /{print $2}' <<<"$SSHD_T")"
 check "Порт SSH отличен от 22 (порт: $SSH_PORT)" "yes" "$([[ -n "$SSH_PORT" && "$SSH_PORT" != "22" ]] && echo yes || echo no)"
 # TODO 2: значение параметра maxauthtries равно 3
 check "MaxAuthTries равно 3"               "3"  "$(awk '/^maxauthtries/{print $2}' <<<"$SSHD_T")"
@@ -34,10 +35,10 @@ echo "[3] Учётные записи"
 awk -F: '$3>=1000 && $3<65534 {printf "  %s (uid=%s)\n",$1,$3}' /etc/passwd
 
 echo "[4] Веб-сервер"
-SITE_DIR="/var/www/devops-site"
-CERT="/etc/ssl/certs/devops.crt"
-KEY="/etc/ssl/private/devops.key"
-CERT_MIN_DAYS="${CERT_MIN_DAYS:-30}"
+declare -r SITE_DIR="/var/www/devops-site"
+declare -r CERT="/etc/ssl/certs/devops.crt"
+declare -r KEY="/etc/ssl/private/devops.key"
+declare -ri CERT_MIN_DAYS="${CERT_MIN_DAYS:-30}"
 check "Служба nginx активна" "active" "$(systemctl is-active nginx)"
 check "Конфигурация nginx корректна" "0" "$(sudo nginx -t >/dev/null 2>&1; echo $?)"
 check "Сертификат действителен ещё не менее ${CERT_MIN_DAYS} дн." "0" \
